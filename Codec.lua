@@ -126,9 +126,10 @@ local function ItemLinkToString(value)
         fields[i] = IntegerToString(tonumber(fields[i]), true)
     end
     local temp = tconcat(fields, "#")
-    return sgsub(temp, "#+", function(value)
-        local count = slen(value)
-        if count > 3 then
+    -- this should only find repetitions of #0 and nothing else
+    return sgsub(temp, "([#0]+)#", function(value)
+        local count = slen(value) / 2
+        if count >= 3 then
             return sformat("<%d>", count)
         end
     end)
@@ -171,7 +172,9 @@ end
 local StringToItemLink
 do
     local LINK_COMPACT_DATA_SEPARATOR = "#"
-    local LINK_COMPACT_DATA_REPLACEMENT = LINK_COMPACT_DATA_SEPARATOR .. "0"
+    -- this isn't 100% clean, but we want the last repetition to end on the separator 
+    -- and zo_strsplit will collapse multiple separators anyway
+    local LINK_COMPACT_DATA_REPLACEMENT = LINK_COMPACT_DATA_SEPARATOR .. "0" .. LINK_COMPACT_DATA_SEPARATOR
     local LINK_ORIGINAL_DATA_SEPARATOR = ":"
     local LINK_PLACEHOLDER_PATTERN = "<(%d+)>"
 
