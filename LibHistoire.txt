@@ -1,8 +1,8 @@
 ## Title: LibHistoire
 ## Author: sirinsidiator
-## Version: 1.0.2
-## AddOnVersion: 237
-## APIVersion: 100032 100033
+## Version: 1.1.0
+## AddOnVersion: 312
+## APIVersion: 100033
 ## IsLibrary: true
 ## DependsOn: LibDebugLogger LibAsync LibCustomMenu
 ## SavedVariables: LibHistoire_Settings LibHistoire_GuildNames LibHistoire_NameDictionary LibHistoire_GuildHistory
@@ -17,6 +17,7 @@
 StartUp.lua
 Codec.lua
 DisplayNameCache.lua
+PerformanceTracker.lua
 guildHistoryCache/controls.xml
 guildHistoryCache/GuildHistoryAdapter.lua
 guildHistoryCache/GuildHistoryStatusTooltip.lua

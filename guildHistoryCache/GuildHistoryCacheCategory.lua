@@ -42,6 +42,7 @@ function GuildHistoryCacheCategory:Initialize(nameCache, saveData, guildId, cate
     saveData[self.key] = self.saveData
     self.guildId = guildId
     self.category = category
+    self.performanceTracker = internal.class.PerformanceTracker:New()
 
     self.events = {}
     self.eventTimeLookup = {}
@@ -68,6 +69,18 @@ function GuildHistoryCacheCategory:ResetUnlinkedEvents()
     self.unlinkedEvents = {}
 end
 
+function GuildHistoryCacheCategory:GetKey()
+    return self.key
+end
+
+function GuildHistoryCacheCategory:GetGuildId()
+    return self.guildId
+end
+
+function GuildHistoryCacheCategory:GetCategory()
+    return self.category
+end
+
 function GuildHistoryCacheCategory:GetNameDictionary()
     return self.nameCache
 end
@@ -86,6 +99,10 @@ end
 
 function GuildHistoryCacheCategory:IsProcessing()
     return self.storeEventsTask ~= nil or self.rescanEventsTask ~= nil
+end
+
+function GuildHistoryCacheCategory:GetNumPendingEvents()
+    return self.numPendingEvents or 0
 end
 
 function GuildHistoryCacheCategory:GetNumUnlinkedEvents()
@@ -238,10 +255,10 @@ function GuildHistoryCacheCategory:FindClosestIndexForEventTime(eventTime)
     -- and do a binary search for the event
     local event, index = self:SearchClosestEventTimeInInterval(eventTime, firstIndex, lastIndex)
     if event then
-        -- make sure we got the first index for a specific time
-        for i = index - 1, 1, -1 do
-            local previous = self:GetEvent(i)
-            if previous:GetEventTime() >= eventTime then
+        -- make sure we got the last index for a specific time
+        for i = index + 1, self:GetNumEvents() do
+            local next = self:GetEvent(i)
+            if next:GetEventTime() == eventTime then
                 index = i
             else
                 break
@@ -568,6 +585,10 @@ function GuildHistoryCacheCategory:LinkHistory()
     local unlinkedEvents = self.unlinkedEvents
     self.unlinkedEvents = nil
     self.storeEventsTask = self:StoreReceivedEvents(unlinkedEvents, true)
+    if #unlinkedEvents > 0 then
+        logger:Info("Begin linking %d events in guild %s (%d) category %s (%d)", #unlinkedEvents, GetGuildName(self.guildId), self.guildId, GetString("SI_GUILDHISTORYCATEGORY", self.category), self.category)
+    end
+    internal:FireCallbacks(internal.callback.HISTORY_BEGIN_LINKING, self.guildId, self.category, #unlinkedEvents)
     return true
 end
 
@@ -583,7 +604,7 @@ function GuildHistoryCacheCategory:GetFilteredReceivedEvents()
     local lastStoredEventId = lastStoredEntry and lastStoredEntry:GetEventId() or 0
     local sessionStartId = self.newestEventAtStart and self.newestEventAtStart:GetEventId() or 0
 
-    logger:Debug("GetFilteredReceivedEvents from %d to %d (%d/%d)", nextIndex, numEvents, guildId, category)
+    logger:Verbose("GetFilteredReceivedEvents from %d to %d (%d/%d)", nextIndex, numEvents, guildId, category)
     local skipped = 0
     local events = {}
     local hasReachedLastStoredEventId = false
@@ -591,13 +612,13 @@ function GuildHistoryCacheCategory:GetFilteredReceivedEvents()
         local eventId = select(9, GetGuildEventInfo(guildId, category, index))
         if eventId > lastStoredEventId then
             if waitForMore ~= numEvents and self:HasLinked() then
-                logger:Debug("Detected push events. Wait for more")
+                logger:Verbose("Detected push events. Wait for more")
                 return false, false, RETRY_WAIT_FOR_MORE_DELAY
             end
 
             local event = GuildHistoryCacheEntry:New(self, guildId, category, index)
             if not event:IsValid() then
-                logger:Debug("Has found invalid events")
+                logger:Verbose("Has found invalid events")
                 return false, false, RETRY_ON_INVALID_DELAY
             end
             events[#events + 1] = event
@@ -614,7 +635,7 @@ function GuildHistoryCacheCategory:GetFilteredReceivedEvents()
     end
 
     self.lastIndex = lastIndex
-    logger:Debug("#events: %d - skipped: %d (%d/%d)", #events, skipped, guildId, category)
+    logger:Verbose("#events: %d - skipped: %d (%d/%d)", #events, skipped, guildId, category)
     return events, hasReachedLastStoredEventId
 end
 
@@ -662,19 +683,21 @@ function GuildHistoryCacheCategory:SeparateReceivedEvents(events)
 end
 
 function GuildHistoryCacheCategory:StoreReceivedEvents(events, hasLinked)
-    if hasLinked then
-        logger:Info("Begin linking %d events in guild %s (%d) category %s (%d)", #events, GetGuildName(self.guildId), self.guildId, GetString("SI_GUILDHISTORYCATEGORY", self.category), self.category)
-        internal:FireCallbacks(internal.callback.HISTORY_BEGIN_LINKING, self.guildId, self.category, #events)
-    end
-
     local task = internal:CreateAsyncTask()
+    self.numPendingEvents = #events
+    self.performanceTracker:Reset()
     task:For(1, #events):Do(function(i)
+        self.numPendingEvents = self.numPendingEvents - 1
+        self.performanceTracker:Increment()
         self:StoreEvent(events[i], false)
     end):Then(function()
         self.storeEventsTask = nil
+        self.numPendingEvents = nil
         if hasLinked then
             self.progressDirty = true
-            logger:Info("Finished linking %d events in guild %s (%d) category %s (%d)", #events, GetGuildName(self.guildId), self.guildId, GetString("SI_GUILDHISTORYCATEGORY", self.category), self.category)
+            if #events > 0 then
+                logger:Info("Finished linking %d events in guild %s (%d) category %s (%d)", #events, GetGuildName(self.guildId), self.guildId, GetString("SI_GUILDHISTORYCATEGORY", self.category), self.category)
+            end
             internal:FireCallbacks(internal.callback.HISTORY_LINKED, self.guildId, self.category)
         end
         if self.hasPendingEvents then
@@ -683,6 +706,14 @@ function GuildHistoryCacheCategory:StoreReceivedEvents(events, hasLinked)
         end
     end)
     return task
+end
+
+function GuildHistoryCacheCategory:GetPendingEventMetrics()
+    if not self:IsProcessing() then return 0, -1, -1 end
+
+    local count = self.numPendingEvents
+    local speed, timeLeft = self.performanceTracker:GetProcessingSpeedAndEstimatedTimeLeft(count)
+    return count, speed, timeLeft
 end
 
 function GuildHistoryCacheCategory:AddUnsortedUnlinkedEvents(unsortedEvents)
