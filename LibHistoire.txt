@@ -1,7 +1,7 @@
 ## Title: LibHistoire
 ## Author: sirinsidiator
-## Version: 1.0.1
-## AddOnVersion: 235
+## Version: 1.0.2
+## AddOnVersion: 237
 ## APIVersion: 100032 100033
 ## IsLibrary: true
 ## DependsOn: LibDebugLogger LibAsync LibCustomMenu
